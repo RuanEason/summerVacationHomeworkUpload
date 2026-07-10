@@ -1,0 +1,240 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum UserRole {
+  ROOT
+  ADMIN
+  USER
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  DISABLED
+}
+
+enum InvitationStatus {
+  PENDING
+  USED
+  REVOKED
+  EXPIRED
+}
+
+enum PlanStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum OccurrenceStatus {
+  SCHEDULED
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum SubmissionStatus {
+  DRAFT
+  SUBMITTED
+  MAKEUP
+  VOIDED
+}
+
+model SystemConfig {
+  id            Int      @id @default(1)
+  systemName    String   @default("暑假作业打卡") @db.VarChar(100)
+  timezone      String   @default("Asia/Shanghai") @db.VarChar(64)
+  rootUserId    String   @unique @db.VarChar(36)
+  initializedAt DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  rootUser      User     @relation("SystemRoot", fields: [rootUserId], references: [id], onDelete: Restrict)
+}
+
+model User {
+  id                 String        @id @default(uuid()) @db.VarChar(36)
+  username           String        @unique @db.VarChar(64)
+  displayName        String        @db.VarChar(80)
+  passwordHash       String?       @db.VarChar(255)
+  role               UserRole      @default(USER)
+  status             UserStatus    @default(PENDING)
+  mustChangePassword Boolean       @default(false)
+  lastLoginAt        DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  createdById        String?       @db.VarChar(36)
+  createdBy          User?         @relation("UserCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdUsers       User[]        @relation("UserCreator")
+  systemRoot         SystemConfig? @relation("SystemRoot")
+  sessions           Session[]
+  invitations        Invitation[]
+  ownedGroups        Group[]       @relation("GroupOwner")
+  groupMemberships   GroupMember[]
+  submissions        Submission[]
+  auditLogs          AuditLog[]    @relation("AuditActor")
+
+  @@index([role, status])
+  @@index([createdById])
+}
+
+model Session {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  tokenHash  String   @unique @db.Char(64)
+  userId     String   @db.VarChar(36)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  ipAddress  String?  @db.VarChar(64)
+  userAgent  String?  @db.VarChar(255)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+model Invitation {
+  id        String           @id @default(uuid()) @db.VarChar(36)
+  tokenHash String           @unique @db.Char(64)
+  userId    String           @db.VarChar(36)
+  status    InvitationStatus @default(PENDING)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([expiresAt])
+}
+
+model Group {
+  id           String        @id @default(uuid()) @db.VarChar(36)
+  name         String        @db.VarChar(100)
+  description  String?       @db.VarChar(255)
+  ownerAdminId String        @db.VarChar(36)
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  ownerAdmin   User          @relation("GroupOwner", fields: [ownerAdminId], references: [id], onDelete: Restrict)
+  members      GroupMember[]
+  plans        CheckInPlan[]
+
+  @@index([ownerAdminId, isActive])
+}
+
+model GroupMember {
+  id                    String   @id @default(uuid()) @db.VarChar(36)
+  groupId               String   @db.VarChar(36)
+  userId                String   @unique @db.VarChar(36)
+  participatesInCheckIn Boolean  @default(true)
+  joinedAt              DateTime @default(now())
+  group                 Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([groupId, participatesInCheckIn])
+}
+
+model CheckInPlan {
+  id                 String              @id @default(uuid()) @db.VarChar(36)
+  groupId            String              @db.VarChar(36)
+  title              String              @db.VarChar(120)
+  description        String?             @db.Text
+  status             PlanStatus          @default(DRAFT)
+  startDate          DateTime            @db.Date
+  endDate            DateTime            @db.Date
+  weekdays           Json
+  openTimeMinutes    Int                 @default(0)
+  dueTimeMinutes     Int                 @default(1439)
+  requiredImageCount Int                 @default(1)
+  maxImageCount      Int                 @default(9)
+  allowMakeup        Boolean             @default(false)
+  makeupDays         Int                 @default(0)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  group              Group               @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  occurrences        CheckInOccurrence[]
+
+  @@index([groupId, status])
+  @@index([startDate, endDate])
+}
+
+model CheckInOccurrence {
+  id                 String           @id @default(uuid()) @db.VarChar(36)
+  planId             String           @db.VarChar(36)
+  checkInDate        DateTime         @db.Date
+  opensAt            DateTime
+  dueAt              DateTime
+  makeupUntil        DateTime?
+  requiredImageCount Int
+  maxImageCount      Int
+  status             OccurrenceStatus @default(SCHEDULED)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  plan               CheckInPlan      @relation(fields: [planId], references: [id], onDelete: Cascade)
+  submissions        Submission[]
+
+  @@unique([planId, checkInDate])
+  @@index([checkInDate, status])
+  @@index([opensAt, dueAt])
+}
+
+model Submission {
+  id                 String            @id @default(uuid()) @db.VarChar(36)
+  occurrenceId       String            @db.VarChar(36)
+  userId             String            @db.VarChar(36)
+  status             SubmissionStatus  @default(DRAFT)
+  note               String?           @db.VarChar(500)
+  reviewNote         String?           @db.VarChar(500)
+  returnedAt         DateTime?
+  returnedFromStatus SubmissionStatus?
+  submittedAt        DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  occurrence         CheckInOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  user               User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  images             SubmissionImage[]
+
+  @@unique([occurrenceId, userId])
+  @@index([userId, submittedAt])
+  @@index([status, submittedAt])
+}
+
+model SubmissionImage {
+  id           String     @id @default(uuid()) @db.VarChar(36)
+  submissionId String     @db.VarChar(36)
+  storageKey   String     @unique @db.VarChar(500)
+  originalName String     @db.VarChar(255)
+  mimeType     String     @db.VarChar(100)
+  sizeBytes    Int
+  width        Int?
+  height       Int?
+  sortOrder    Int        @default(0)
+  checksum     String?    @db.Char(64)
+  createdAt    DateTime   @default(now())
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId, sortOrder])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  actorId    String?  @db.VarChar(36)
+  action     String   @db.VarChar(100)
+  entityType String   @db.VarChar(80)
+  entityId   String?  @db.VarChar(64)
+  summary    String?  @db.VarChar(500)
+  metadata   Json?
+  ipAddress  String?  @db.VarChar(64)
+  createdAt  DateTime @default(now())
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
