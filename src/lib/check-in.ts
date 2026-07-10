@@ -2,7 +2,7 @@ import "server-only"
 
 import { dateKeyToDatabaseDate, getShanghaiDateKey } from "@/lib/dates"
 import { prisma } from "@/lib/prisma"
-import { publicUploadUrl } from "@/lib/uploads"
+import { cosUploadUrl } from "@/lib/uploads"
 
 export async function getAvailableCheckInTasks(userId: string) {
   const now = new Date()
@@ -62,7 +62,7 @@ export async function getAvailableCheckInTasks(userId: string) {
         returnedAt: submission.returnedAt?.toISOString() ?? null,
         images: submission.images.map((image) => ({
           id: image.id,
-          url: publicUploadUrl(image.storageKey),
+          url: cosUploadUrl(image.storageKey),
           originalName: image.originalName,
         })),
       } : null,

@@ -10,7 +10,7 @@ import { requireRole } from "@/lib/auth"
 import { returnSubmission } from "@/app/actions/admin"
 import { formatShanghaiDate } from "@/lib/dates"
 import { prisma } from "@/lib/prisma"
-import { publicUploadUrl } from "@/lib/uploads"
+import { cosUploadUrl } from "@/lib/uploads"
 
 export default async function SubmissionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const viewer = await requireRole(["ROOT", "ADMIN"])
@@ -49,7 +49,7 @@ export default async function SubmissionDetailPage({ params }: { params: Promise
       <Card>
         <CardHeader><CardTitle>作业原图</CardTitle><CardDescription>点击图片可在新窗口查看原始文件。</CardDescription></CardHeader>
         <CardContent>
-          {submission.images.length ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">{submission.images.map((image, index) => <a key={image.id} href={publicUploadUrl(image.storageKey)} target="_blank" rel="noreferrer" className="group space-y-2"><div className="aspect-square rounded-xl border bg-muted bg-cover bg-center transition-transform group-hover:scale-[1.01]" style={{ backgroundImage: `url(${JSON.stringify(publicUploadUrl(image.storageKey))})` }} /><div className="px-1 text-xs text-muted-foreground"><p className="truncate">图片 {index + 1} · {image.originalName}</p><p>{(image.sizeBytes / 1024 / 1024).toFixed(2)} MB · {image.mimeType}</p></div></a>)}</div> : <div className="flex min-h-52 items-center justify-center text-muted-foreground">该提交没有图片</div>}
+          {submission.images.length ? <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">{submission.images.map((image, index) => <a key={image.id} href={cosUploadUrl(image.storageKey)} target="_blank" rel="noreferrer" className="group space-y-2"><div className="aspect-square rounded-xl border bg-muted bg-cover bg-center transition-transform group-hover:scale-[1.01]" style={{ backgroundImage: `url(${JSON.stringify(cosUploadUrl(image.storageKey))})` }} /><div className="px-1 text-xs text-muted-foreground"><p className="truncate">图片 {index + 1} · {image.originalName}</p><p>{(image.sizeBytes / 1024 / 1024).toFixed(2)} MB · {image.mimeType}</p></div></a>)}</div> : <div className="flex min-h-52 items-center justify-center text-muted-foreground">该提交没有图片</div>}
         </CardContent>
       </Card>
 

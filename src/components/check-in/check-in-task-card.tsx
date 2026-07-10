@@ -50,6 +50,7 @@ function formatDateTime(value: string) {
 export function CheckInTaskCard({ task }: { task: CheckInTask }) {
   const [images, setImages] = useState(task.submission?.images ?? [])
   const [uploading, setUploading] = useState(false)
+  const [deletingImageId, setDeletingImageId] = useState<string>()
   const [uploadError, setUploadError] = useState<string>()
   const [state, action, submitting] = useActionState(submitCheckIn, initialState)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -97,14 +98,25 @@ export function CheckInTaskCard({ task }: { task: CheckInTask }) {
   }
 
   async function deleteImage(imageId: string) {
+    if (deletingImageId) return
+
     setUploadError(undefined)
-    const response = await fetch(`/api/submission-images/${imageId}`, { method: "DELETE" })
-    const result = await response.json()
-    if (!response.ok) {
-      setUploadError(result.message || "删除图片失败。")
-      return
+    setDeletingImageId(imageId)
+
+    try {
+      const response = await fetch(`/api/submission-images/${imageId}`, { method: "DELETE" })
+      const result = await response.json().catch(() => ({})) as { message?: string }
+
+      if (!response.ok) {
+        throw new Error(result.message || `删除图片失败（${response.status}）。`)
+      }
+
+      setImages((current) => current.filter((image) => image.id !== imageId))
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "删除图片失败，请检查网络后重试。")
+    } finally {
+      setDeletingImageId(undefined)
     }
-    setImages((current) => current.filter((image) => image.id !== imageId))
   }
 
   return (
@@ -137,7 +149,9 @@ export function CheckInTaskCard({ task }: { task: CheckInTask }) {
               <div key={image.id} className="group relative aspect-square overflow-hidden rounded-xl border bg-muted">
                 <div className="size-full bg-cover bg-center" style={{ backgroundImage: `url(${JSON.stringify(image.url)})` }} role="img" aria-label={image.originalName} />
                 {!finalSubmission && timing.canEdit ? (
-                  <Button type="button" variant="destructive" size="icon-xs" className="absolute right-1.5 top-1.5 shadow-sm" onClick={() => deleteImage(image.id)} aria-label="删除图片"><Trash2 /></Button>
+                  <Button type="button" variant="destructive" size="icon-xs" className="absolute right-1.5 top-1.5 shadow-sm" disabled={Boolean(deletingImageId)} onClick={() => deleteImage(image.id)} aria-label={deletingImageId === image.id ? "正在删除图片" : "删除图片"}>
+                    {deletingImageId === image.id ? <LoaderCircle className="animate-spin" /> : <Trash2 />}
+                  </Button>
                 ) : null}
               </div>
             ))}

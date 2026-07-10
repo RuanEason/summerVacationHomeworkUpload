@@ -2,7 +2,7 @@ import { z } from "zod"
 
 import { getCurrentUser } from "@/lib/session"
 import { prisma } from "@/lib/prisma"
-import { publicUploadUrl, removePublicUpload, savePublicUpload, validateImageContent, validateImageFile } from "@/lib/uploads"
+import { cosUploadUrl, removeCosUpload, saveCosUpload, validateImageContent, validateImageFile } from "@/lib/uploads"
 
 export const runtime = "nodejs"
 
@@ -67,11 +67,11 @@ export async function POST(
   const submission = existing ?? await prisma.submission.create({
     data: { occurrenceId: occurrence.id, userId: user.id, status: "DRAFT" },
   })
-  const savedFiles: Awaited<ReturnType<typeof savePublicUpload>>[] = []
+  const savedFiles: Awaited<ReturnType<typeof saveCosUpload>>[] = []
 
   try {
     for (const file of files) {
-      savedFiles.push(await savePublicUpload({ file, userId: user.id, occurrenceId: occurrence.id }))
+      savedFiles.push(await saveCosUpload({ file, userId: user.id, occurrenceId: occurrence.id }))
     }
 
     const images = await prisma.$transaction(
@@ -87,12 +87,12 @@ export async function POST(
     return Response.json({
       images: images.map((image) => ({
         id: image.id,
-        url: publicUploadUrl(image.storageKey),
+        url: cosUploadUrl(image.storageKey),
         originalName: image.originalName,
       })),
     })
   } catch {
-    await Promise.all(savedFiles.map((file) => removePublicUpload(file.storageKey)))
+    await Promise.allSettled(savedFiles.map((file) => removeCosUpload(file.storageKey)))
     return Response.json({ message: "图片保存失败，请重试。" }, { status: 500 })
   }
 }

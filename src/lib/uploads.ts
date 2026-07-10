@@ -1,15 +1,57 @@
 import "server-only"
 
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, unlink, writeFile } from "node:fs/promises"
+import { unlink } from "node:fs/promises"
 import path from "node:path"
+import COS from "cos-nodejs-sdk-v5"
 
-const UPLOAD_ROOT = path.join(
+const COS_UPLOAD_PREFIX = "homework"
+const LEGACY_UPLOAD_PREFIX = "uploads"
+const LEGACY_UPLOAD_ROOT = path.join(
   /*turbopackIgnore: true*/ process.cwd(),
   "public",
-  "uploads"
+  LEGACY_UPLOAD_PREFIX
 )
 const MAX_FILE_SIZE = 10 * 1024 * 1024
+
+function getCosConfig() {
+  const SecretId = process.env.TENCENT_COS_SECRET_ID
+  const SecretKey = process.env.TENCENT_COS_SECRET_KEY
+  const Bucket = process.env.TENCENT_COS_BUCKET
+  const Region = process.env.TENCENT_COS_REGION
+
+  const missing = [
+    ["TENCENT_COS_SECRET_ID", SecretId],
+    ["TENCENT_COS_SECRET_KEY", SecretKey],
+    ["TENCENT_COS_BUCKET", Bucket],
+    ["TENCENT_COS_REGION", Region],
+  ].filter(([, value]) => !value).map(([name]) => name)
+
+  if (missing.length) {
+    throw new Error(`缺少腾讯云 COS 配置：${missing.join("、")}`)
+  }
+
+  return {
+    SecretId: SecretId as string,
+    SecretKey: SecretKey as string,
+    Bucket: Bucket as string,
+    Region: Region as string,
+  }
+}
+
+let cosClient: COS | undefined
+
+function getCosClient() {
+  const config = getCosConfig()
+  cosClient ??= new COS({ SecretId: config.SecretId, SecretKey: config.SecretKey })
+  return { cos: cosClient, Bucket: config.Bucket, Region: config.Region }
+}
+
+function isCosObjectMissing(error: unknown) {
+  if (!error || typeof error !== "object") return false
+  const cosError = error as { code?: string; statusCode?: number }
+  return cosError.statusCode === 404 || cosError.code === "NoSuchKey"
+}
 
 const extensionsByMimeType: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -53,7 +95,7 @@ export async function validateImageContent(file: File) {
   return false
 }
 
-export async function savePublicUpload({
+export async function saveCosUpload({
   file,
   userId,
   occurrenceId,
@@ -65,19 +107,20 @@ export async function savePublicUpload({
   const validation = validateImageFile(file)
   if ("error" in validation) throw new Error(validation.error)
 
-  const relativeDirectory = path.posix.join(userId, occurrenceId)
   const filename = `${randomUUID()}.${validation.extension}`
-  const storageKey = path.posix.join("uploads", relativeDirectory, filename)
-  const absoluteDirectory = path.join(
-    /*turbopackIgnore: true*/ UPLOAD_ROOT,
-    userId,
-    occurrenceId
-  )
-  const absolutePath = path.join(absoluteDirectory, filename)
+  const storageKey = path.posix.join(COS_UPLOAD_PREFIX, userId, occurrenceId, filename)
   const buffer = Buffer.from(await file.arrayBuffer())
+  const { cos, Bucket, Region } = getCosClient()
 
-  await mkdir(absoluteDirectory, { recursive: true })
-  await writeFile(absolutePath, buffer, { flag: "wx" })
+  await cos.putObject({
+    Bucket,
+    Region,
+    Key: storageKey,
+    Body: buffer,
+    ContentLength: buffer.length,
+    ContentType: file.type,
+    CacheControl: "public, max-age=31536000, immutable",
+  })
 
   return {
     storageKey,
@@ -88,21 +131,49 @@ export async function savePublicUpload({
   }
 }
 
-export async function removePublicUpload(storageKey: string) {
-  if (!storageKey.startsWith("uploads/")) return
+export async function removeCosUpload(storageKey: string) {
+  if (storageKey.startsWith(`${LEGACY_UPLOAD_PREFIX}/`)) {
+    const relativeKey = storageKey.slice(`${LEGACY_UPLOAD_PREFIX}/`.length)
+    const absolutePath = path.resolve(
+      /*turbopackIgnore: true*/ LEGACY_UPLOAD_ROOT,
+      ...relativeKey.split("/")
+    )
+    const uploadRootWithSeparator = `${path.resolve(LEGACY_UPLOAD_ROOT)}${path.sep}`
 
-  const relativeKey = storageKey.slice("uploads/".length)
-  const absolutePath = path.resolve(
-    /*turbopackIgnore: true*/ UPLOAD_ROOT,
-    ...relativeKey.split("/")
-  )
-  const uploadRootWithSeparator = `${path.resolve(UPLOAD_ROOT)}${path.sep}`
+    if (absolutePath.startsWith(uploadRootWithSeparator)) {
+      await unlink(absolutePath).catch(() => undefined)
+    }
+    return
+  }
 
-  if (!absolutePath.startsWith(uploadRootWithSeparator)) return
+  if (!storageKey.startsWith(`${COS_UPLOAD_PREFIX}/`)) return
 
-  await unlink(absolutePath).catch(() => undefined)
+  const { cos, Bucket, Region } = getCosClient()
+  await cos.deleteObject({ Bucket, Region, Key: storageKey })
+
+  try {
+    await cos.headObject({ Bucket, Region, Key: storageKey })
+  } catch (error) {
+    if (isCosObjectMissing(error)) return
+    throw error
+  }
+
+  throw new Error("腾讯云 COS 返回删除成功，但对象仍然存在。")
 }
 
-export function publicUploadUrl(storageKey: string) {
-  return `/${storageKey.split(path.sep).join("/")}`
+export function cosUploadUrl(storageKey: string) {
+  if (!storageKey.startsWith(`${COS_UPLOAD_PREFIX}/`)) {
+    return `/${storageKey.split(path.sep).join("/")}`
+  }
+
+  const encodedKey = storageKey.split("/").map(encodeURIComponent).join("/")
+  const cdnDomain = process.env.NEXT_PUBLIC_CDN_DOMAIN?.trim().replace(/\/$/, "")
+
+  if (cdnDomain) {
+    const baseUrl = /^https?:\/\//i.test(cdnDomain) ? cdnDomain : `https://${cdnDomain}`
+    return `${baseUrl}/${encodedKey}`
+  }
+
+  const { Bucket, Region } = getCosConfig()
+  return `https://${Bucket}.cos.${Region}.myqcloud.com/${encodedKey}`
 }

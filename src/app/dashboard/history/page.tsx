@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { requireRole } from "@/lib/auth"
 import { formatShanghaiDate } from "@/lib/dates"
 import { prisma } from "@/lib/prisma"
-import { publicUploadUrl } from "@/lib/uploads"
+import { cosUploadUrl } from "@/lib/uploads"
 
 export default async function HistoryPage() {
   const user = await requireRole(["ADMIN", "USER"])
@@ -29,7 +29,7 @@ export default async function HistoryPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-              {submission.images.map((image) => <a key={image.id} href={publicUploadUrl(image.storageKey)} target="_blank" rel="noreferrer" className="aspect-square rounded-xl border bg-muted bg-cover bg-center" style={{ backgroundImage: `url(${JSON.stringify(publicUploadUrl(image.storageKey))})` }} aria-label={`查看图片 ${image.originalName}`} />)}
+              {submission.images.map((image) => <a key={image.id} href={cosUploadUrl(image.storageKey)} target="_blank" rel="noreferrer" className="aspect-square rounded-xl border bg-muted bg-cover bg-center" style={{ backgroundImage: `url(${JSON.stringify(cosUploadUrl(image.storageKey))})` }} aria-label={`查看图片 ${image.originalName}`} />)}
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground"><span className="inline-flex items-center gap-1"><ImageIcon className="size-4" />{submission.images.length} 张图片</span><span>提交于 {submission.submittedAt ? formatShanghaiDate(submission.submittedAt, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}</span></div>
             {submission.note ? <p className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">备注：{submission.note}</p> : null}
