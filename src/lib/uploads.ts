@@ -1,6 +1,6 @@
 import "server-only"
 
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { unlink } from "node:fs/promises"
 import path from "node:path"
 import COS from "cos-nodejs-sdk-v5"
@@ -14,7 +14,7 @@ const LEGACY_UPLOAD_ROOT = path.join(
 )
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 
-function getCosConfig() {
+export function getCosConfig() {
   const SecretId = process.env.TENCENT_COS_SECRET_ID
   const SecretKey = process.env.TENCENT_COS_SECRET_KEY
   const Bucket = process.env.TENCENT_COS_BUCKET
@@ -62,73 +62,81 @@ const extensionsByMimeType: Record<string, string> = {
 }
 
 export function validateImageFile(file: File) {
-  const extension = extensionsByMimeType[file.type.toLowerCase()]
+  return validateImageMetadata({ mimeType: file.type, sizeBytes: file.size })
+}
+
+export function validateImageMetadata({
+  mimeType,
+  sizeBytes,
+}: {
+  mimeType: string
+  sizeBytes: number
+}) {
+  const extension = extensionsByMimeType[mimeType.toLowerCase()]
 
   if (!extension) {
     return { error: "仅支持 JPG、PNG、WebP、HEIC 图片。" as const }
   }
-  if (file.size <= 0 || file.size > MAX_FILE_SIZE) {
+  if (!Number.isInteger(sizeBytes) || sizeBytes <= 0 || sizeBytes > MAX_FILE_SIZE) {
     return { error: "单张图片不能超过 10MB。" as const }
   }
 
   return { extension }
 }
 
-export async function validateImageContent(file: File) {
-  const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer())
-  const mimeType = file.type.toLowerCase()
-
-  if (mimeType === "image/jpeg") {
-    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
-  }
-  if (mimeType === "image/png") {
-    return bytes.slice(0, 8).every((value, index) => value === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index])
-  }
-  if (mimeType === "image/webp") {
-    return String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" &&
-      String.fromCharCode(...bytes.slice(8, 12)) === "WEBP"
-  }
-  if (mimeType === "image/heic" || mimeType === "image/heif") {
-    return String.fromCharCode(...bytes.slice(4, 8)) === "ftyp"
-  }
-
-  return false
-}
-
-export async function saveCosUpload({
-  file,
+export function createCosUploadKey({
+  mimeType,
   userId,
   occurrenceId,
 }: {
-  file: File
+  mimeType: string
   userId: string
   occurrenceId: string
 }) {
-  const validation = validateImageFile(file)
+  const validation = validateImageMetadata({ mimeType, sizeBytes: 1 })
   if ("error" in validation) throw new Error(validation.error)
 
   const filename = `${randomUUID()}.${validation.extension}`
-  const storageKey = path.posix.join(COS_UPLOAD_PREFIX, userId, occurrenceId, filename)
-  const buffer = Buffer.from(await file.arrayBuffer())
+  return path.posix.join(COS_UPLOAD_PREFIX, userId, occurrenceId, filename)
+}
+
+export function isUserCosUploadKey({
+  storageKey,
+  userId,
+  occurrenceId,
+}: {
+  storageKey: string
+  userId: string
+  occurrenceId: string
+}) {
+  const prefix = `${path.posix.join(COS_UPLOAD_PREFIX, userId, occurrenceId)}/`
+  return storageKey.startsWith(prefix) && !storageKey.slice(prefix.length).includes("/")
+}
+
+export function getCosPublicConfig() {
+  const { Bucket, Region } = getCosConfig()
+  return { Bucket, Region }
+}
+
+export async function verifyCosUpload({
+  storageKey,
+  mimeType,
+  sizeBytes,
+}: {
+  storageKey: string
+  mimeType: string
+  sizeBytes: number
+}) {
   const { cos, Bucket, Region } = getCosClient()
+  const result = await cos.headObject({ Bucket, Region, Key: storageKey })
+  const actualSize = Number(result.headers?.["content-length"])
+  const actualType = String(result.headers?.["content-type"] ?? "").split(";", 1)[0].toLowerCase()
 
-  await cos.putObject({
-    Bucket,
-    Region,
-    Key: storageKey,
-    Body: buffer,
-    ContentLength: buffer.length,
-    ContentType: file.type,
-    CacheControl: "public, max-age=31536000, immutable",
-  })
-
-  return {
-    storageKey,
-    originalName: file.name.slice(0, 255) || filename,
-    mimeType: file.type,
-    sizeBytes: file.size,
-    checksum: createHash("sha256").update(buffer).digest("hex"),
+  if (actualSize !== sizeBytes || actualType !== mimeType.toLowerCase()) {
+    throw new Error("COS 中的图片信息与上传申请不一致。")
   }
+
+  return { etag: result.ETag }
 }
 
 export async function removeCosUpload(storageKey: string) {

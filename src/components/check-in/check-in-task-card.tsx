@@ -11,6 +11,27 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Textarea } from "@/components/ui/textarea"
 
 type TaskImage = { id: string; url: string; originalName: string }
+type DirectUploadFile = {
+  storageKey: string
+  originalName: string
+  mimeType: string
+  sizeBytes: number
+}
+type DirectUploadPreparation = {
+  upload: {
+    bucket: string
+    region: string
+    credentials: {
+      tmpSecretId: string
+      tmpSecretKey: string
+      sessionToken: string
+      startTime: number
+      expiredTime: number
+    }
+  }
+  files: DirectUploadFile[]
+  message?: string
+}
 type CheckInTask = {
   id: string
   title: string
@@ -35,6 +56,33 @@ type CheckInTask = {
 }
 
 const initialState: CheckInActionState = {}
+const MAX_FILE_SIZE = 10 * 1024 * 1024
+const supportedImageTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"])
+
+async function isValidImageContent(file: File) {
+  const bytes = new Uint8Array(await file.slice(0, 16).arrayBuffer())
+  const mimeType = file.type.toLowerCase()
+
+  if (mimeType === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+  if (mimeType === "image/png") {
+    return bytes.slice(0, 8).every((value, index) => value === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index])
+  }
+  if (mimeType === "image/webp") {
+    return String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP"
+  }
+  if (mimeType === "image/heic" || mimeType === "image/heif") {
+    return String.fromCharCode(...bytes.slice(4, 8)) === "ftyp"
+  }
+  return false
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    return error.message
+  }
+  return fallback
+}
 
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -50,6 +98,7 @@ function formatDateTime(value: string) {
 export function CheckInTaskCard({ task }: { task: CheckInTask }) {
   const [images, setImages] = useState(task.submission?.images ?? [])
   const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(0)
   const [deletingImageId, setDeletingImageId] = useState<string>()
   const [uploadError, setUploadError] = useState<string>()
   const [state, action, submitting] = useActionState(submitCheckIn, initialState)
@@ -77,22 +126,99 @@ export function CheckInTaskCard({ task }: { task: CheckInTask }) {
       return
     }
 
-    const formData = new FormData()
-    selected.forEach((file) => formData.append("files", file))
+    for (const file of selected) {
+      if (!supportedImageTypes.has(file.type.toLowerCase())) {
+        setUploadError(`${file.name || "所选文件"} 不是支持的图片格式。`)
+        if (inputRef.current) inputRef.current.value = ""
+        return
+      }
+      if (file.size <= 0 || file.size > MAX_FILE_SIZE) {
+        setUploadError(`${file.name || "所选文件"} 超过 10MB。`)
+        if (inputRef.current) inputRef.current.value = ""
+        return
+      }
+      if (!(await isValidImageContent(file))) {
+        setUploadError(`${file.name || "所选文件"} 不是有效的图片文件。`)
+        if (inputRef.current) inputRef.current.value = ""
+        return
+      }
+    }
+    if (selected.reduce((total, file) => total + file.size, 0) > 50 * 1024 * 1024) {
+      setUploadError("单次上传总大小不能超过 50MB，请分批上传。")
+      if (inputRef.current) inputRef.current.value = ""
+      return
+    }
+
     setUploading(true)
+    setUploadProgress(0)
+    let preparation: DirectUploadPreparation | undefined
+    let uploadedKeys: string[] = []
 
     try {
-      const response = await fetch(`/api/submissions/${task.id}/images`, {
+      const prepareResponse = await fetch(`/api/submissions/${task.id}/images`, {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          files: selected.map((file) => ({
+            originalName: file.name.slice(0, 255) || "image",
+            mimeType: file.type,
+            sizeBytes: file.size,
+          })),
+        }),
       })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.message || "图片上传失败。")
-      setImages((current) => [...current, ...result.images])
+      preparation = await prepareResponse.json().catch(() => ({})) as DirectUploadPreparation
+      if (!prepareResponse.ok) throw new Error(preparation.message || "获取图片直传凭证失败。")
+
+      const { default: COS } = await import("cos-js-sdk-v5")
+      const credentials = preparation.upload.credentials
+      const cos = new COS({
+        SecretId: credentials.tmpSecretId,
+        SecretKey: credentials.tmpSecretKey,
+        SecurityToken: credentials.sessionToken,
+        StartTime: credentials.startTime,
+        ExpiredTime: credentials.expiredTime,
+      })
+      const progressByFile = new Map<number, number>()
+      const uploadResults = await Promise.allSettled(selected.map((file, index) => cos.putObject({
+        Bucket: preparation!.upload.bucket,
+        Region: preparation!.upload.region,
+        Key: preparation!.files[index].storageKey,
+        Body: file,
+        ContentLength: file.size,
+        ContentType: file.type,
+        CacheControl: "public, max-age=31536000, immutable",
+        onProgress: ({ percent }) => {
+          progressByFile.set(index, percent)
+          const total = selected.reduce((sum, _item, itemIndex) => sum + (progressByFile.get(itemIndex) ?? 0), 0)
+          setUploadProgress(total / selected.length)
+        },
+      })))
+      uploadedKeys = uploadResults.flatMap((result, index) => result.status === "fulfilled" ? [preparation!.files[index].storageKey] : [])
+      const failedUpload = uploadResults.find((result) => result.status === "rejected")
+      if (failedUpload?.status === "rejected") throw failedUpload.reason
+
+      const completeResponse = await fetch(`/api/submissions/${task.id}/images`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: preparation.files }),
+      })
+      const result = await completeResponse.json().catch(() => ({})) as { images?: TaskImage[]; message?: string }
+      if (!completeResponse.ok || !result.images) throw new Error(result.message || "图片登记失败。")
+
+      uploadedKeys = []
+      setImages((current) => [...current, ...result.images!])
     } catch (error) {
-      setUploadError(error instanceof Error ? error.message : "图片上传失败。")
+      if (uploadedKeys.length) {
+        await fetch(`/api/submissions/${task.id}/images`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ storageKeys: uploadedKeys }),
+        }).catch(() => undefined)
+      }
+      setUploadError(errorMessage(error, "图片直传失败，请检查网络后重试。"))
     } finally {
       setUploading(false)
+      setUploadProgress(0)
       if (inputRef.current) inputRef.current.value = ""
     }
   }
@@ -159,7 +285,7 @@ export function CheckInTaskCard({ task }: { task: CheckInTask }) {
             {!finalSubmission && timing.canEdit && images.length < task.maxImageCount ? (
               <label className="flex aspect-square cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/20 text-center text-xs text-muted-foreground transition-colors hover:border-primary hover:bg-primary/5 hover:text-primary">
                 {uploading ? <LoaderCircle className="size-7 animate-spin" /> : <ImagePlus className="size-7" />}
-                {uploading ? "上传中" : "添加图片"}
+                {uploading ? `直传 COS ${Math.round(uploadProgress * 100)}%` : "添加图片"}
                 <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple className="sr-only" disabled={uploading} onChange={(event) => uploadFiles(event.target.files)} />
               </label>
             ) : null}

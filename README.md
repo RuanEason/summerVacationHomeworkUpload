@@ -16,10 +16,15 @@
    npm install
    ```
 
-2. 复制 `.env.example` 为 `.env`，并填写数据库连接：
+2. 复制 `.env.example` 为 `.env`，并填写数据库与腾讯云 COS 配置：
 
    ```env
    DATABASE_URL="mysql://用户名:密码@127.0.0.1:3306/check_in_system"
+   TENCENT_COS_SECRET_ID="腾讯云 SecretId"
+   TENCENT_COS_SECRET_KEY="腾讯云 SecretKey"
+   TENCENT_COS_BUCKET="存储桶名称-APPID"
+   TENCENT_COS_REGION="ap-guangzhou"
+   NEXT_PUBLIC_CDN_DOMAIN="https://图片访问域名"
    ```
 
    数据库用户名或密码包含 `@`、`:`、`/` 等字符时，需要先进行 URL 编码。
@@ -54,18 +59,28 @@ npm run start
 
 ## 图片存储
 
-上传图片保存在 `public/uploads`，数据库只记录文件路径和元数据。部署时必须保证该目录可写且持久化；多实例部署时应共享同一个持久化存储。
+新图片通过腾讯云 STS 临时凭证从浏览器直接上传到 COS，Next.js 只负责用户鉴权、签发精确到对象键的短期上传权限，以及在上传后校验 COS 对象并写入数据库。长期 SecretId/SecretKey 不会发送到浏览器。
 
-当前方案不适合直接部署到 Vercel 等无持久本地文件系统的平台，否则重新部署或实例切换后图片可能丢失。如需使用此类平台，应先将上传逻辑改为对象存储（例如 S3、R2、OSS 或 COS）。
+所有新对象保存在 `homework/{用户ID}/{任务ID}/{随机文件名}`。数据库只记录对象键和图片元数据；历史版本中保存在 `public/uploads` 的图片仍保持兼容访问与删除。
 
-`public/uploads` 中的文件可通过静态 URL 访问。生产环境若需要更严格的图片访问控制，应改用受鉴权的下载接口或私有对象存储。
+COS 存储桶必须配置跨域访问规则，至少允许网站正式域名以及本地开发地址，允许 `PUT`、`POST`、`HEAD` 请求和全部必要请求头。例如：
+
+```text
+允许来源：https://example.com、http://localhost:3000、http://127.0.0.1:3000
+允许方法：PUT、POST、HEAD
+允许请求头：*
+暴露响应头：ETag、Content-Length、x-cos-request-id
+```
+
+用于签发 STS 的腾讯云身份需要 `sts:GetFederationToken` 权限，且其自身必须具备对目标 `homework/` 路径的 COS 上传权限。临时凭证有效期为 15 分钟，并且每次只允许写入服务端生成的具体对象键。
 
 ## 备份与恢复
 
-至少定期备份以下两部分，并保持同一时间点的一致性：
+至少定期备份以下内容，并保持同一时间点的一致性：
 
 - MySQL/MariaDB 数据库
-- `public/uploads` 整个目录
+- 腾讯云 COS 存储桶中的 `homework/` 对象
+- 如系统由旧版本升级，继续备份 `public/uploads` 中的历史图片
 
 恢复时先还原数据库，再将上传目录恢复到相同路径。升级前建议同时创建一次完整备份。
 
