@@ -1,3 +1,3 @@
 -- AlterTable
-ALTER TABLE `submission` ADD COLUMN `returnedAt` DATETIME(3) NULL,
+ALTER TABLE `Submission` ADD COLUMN `returnedAt` DATETIME(3) NULL,
     ADD COLUMN `reviewNote` VARCHAR(500) NULL;
