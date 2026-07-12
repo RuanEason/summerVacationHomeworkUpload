@@ -6,27 +6,30 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { requireRole } from "@/lib/auth"
+import { getCheckInAvailableAt, isEarlyCheckIn } from "@/lib/check-in-window"
 import { formatShanghaiDate } from "@/lib/dates"
 import { prisma } from "@/lib/prisma"
 
-type DisplayStatus = "submitted" | "makeup" | "pending" | "available-makeup" | "missing" | "not-open" | "paused"
+type DisplayStatus = "early" | "submitted" | "makeup" | "pending" | "available-makeup" | "missing" | "not-open" | "paused"
 
 function getDisplayStatus(
   occurrence: { opensAt: Date; dueAt: Date; makeupUntil: Date | null },
-  submission: { status: string } | undefined,
+  submission: { status: string; submittedAt: Date | null } | undefined,
   planStatus: string,
+  earlyCheckInSettings: { allowEarlyCheckIn: boolean; earlyCheckInDays: number },
   now: Date
 ): DisplayStatus {
   if (submission?.status === "MAKEUP") return "makeup"
-  if (submission?.status === "SUBMITTED") return "submitted"
+  if (submission?.status === "SUBMITTED") return isEarlyCheckIn(submission.submittedAt, occurrence.opensAt) ? "early" : "submitted"
   if (planStatus === "PAUSED") return "paused"
-  if (now < occurrence.opensAt) return "not-open"
+  if (now < getCheckInAvailableAt(occurrence.opensAt, earlyCheckInSettings)) return "not-open"
   if (now <= occurrence.dueAt) return "pending"
   if (occurrence.makeupUntil && now <= occurrence.makeupUntil) return "available-makeup"
   return "missing"
 }
 
 const statusMeta = {
+  early: { label: "提前打卡", variant: "default" as const, icon: CheckCircle2 },
   submitted: { label: "已提交", variant: "default" as const, icon: CheckCircle2 },
   makeup: { label: "已补卡", variant: "secondary" as const, icon: RotateCcw },
   pending: { label: "待提交", variant: "outline" as const, icon: Clock3 },
@@ -75,7 +78,7 @@ export default async function SubmissionsPage() {
                   <TableBody>
                     {members.length ? members.map((member) => {
                       const submission = submissionsByUser.get(member.userId)
-                      const status = getDisplayStatus(occurrence, submission, occurrence.plan.status, now)
+                      const status = getDisplayStatus(occurrence, submission, occurrence.plan.status, occurrence.plan, now)
                       const meta = statusMeta[status]
                       return <TableRow key={member.id}><TableCell><p className="font-medium">{member.user.displayName}</p><p className="text-xs text-muted-foreground">{member.user.username}</p></TableCell><TableCell><Badge variant={meta.variant}><meta.icon />{meta.label}</Badge></TableCell><TableCell className="whitespace-nowrap text-muted-foreground">{submission?.submittedAt ? formatShanghaiDate(submission.submittedAt, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—"}</TableCell><TableCell>{occurrence.requiredImageCount}–{occurrence.maxImageCount} 张</TableCell><TableCell className="text-right">{submission ? <Button variant="ghost" size="sm" asChild><Link href={`/dashboard/submissions/${submission.id}`}><Eye />查看作业</Link></Button> : <span className="text-muted-foreground">—</span>}</TableCell></TableRow>
                     }) : <TableRow><TableCell colSpan={5} className="h-24 text-center text-muted-foreground">这个小组还没有打卡成员</TableCell></TableRow>}

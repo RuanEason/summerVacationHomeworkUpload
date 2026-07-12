@@ -16,6 +16,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 
 const rootItems = [
@@ -44,7 +45,11 @@ const userItems = [
 
 export function AppSidebar({ role, systemName }: { role: UserRole; systemName: string }) {
   const pathname = usePathname()
+  const { isMobile, setOpenMobile } = useSidebar()
   const items = role === "ROOT" ? rootItems : role === "ADMIN" ? adminItems : userItems
+  const closeMobileSidebar = () => {
+    if (isMobile) setOpenMobile(false)
+  }
 
   return (
     <Sidebar collapsible="icon">
@@ -52,7 +57,7 @@ export function AppSidebar({ role, systemName }: { role: UserRole; systemName: s
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
-              <Link href="/dashboard">
+              <Link href="/dashboard" onClick={closeMobileSidebar}>
                 <span className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                   <ShieldCheck className="size-4" />
                 </span>
@@ -73,7 +78,7 @@ export function AppSidebar({ role, systemName }: { role: UserRole; systemName: s
               {items.map((item) => (
                 <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton asChild isActive={pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(`${item.href}/`))} tooltip={item.title}>
-                    <Link href={item.href}>
+                    <Link href={item.href} onClick={closeMobileSidebar}>
                       <item.icon />
                       <span>{item.title}</span>
                     </Link>

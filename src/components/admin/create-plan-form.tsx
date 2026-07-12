@@ -113,6 +113,18 @@ export function CreatePlanForm({ groups }: { groups: Array<{ id: string; name: s
 
       <div className="grid gap-4 rounded-xl border bg-muted/30 p-4 sm:grid-cols-[1fr_10rem] sm:items-end">
         <label className="flex items-start gap-3 text-sm">
+          <input name="allowEarlyCheckIn" type="checkbox" className="mt-0.5 size-4 accent-primary" />
+          <span><span className="block font-medium">允许提前打卡</span><span className="text-muted-foreground">成员可在原定开放时间前提交作业，截止与补卡时间不变。</span></span>
+        </label>
+        <div className="space-y-2">
+          <Label htmlFor="earlyCheckInDays">提前天数</Label>
+          <Input id="earlyCheckInDays" name="earlyCheckInDays" type="number" min="1" max="365" defaultValue="1" />
+          <FieldError messages={state.errors?.earlyCheckInDays} />
+        </div>
+      </div>
+
+      <div className="grid gap-4 rounded-xl border bg-muted/30 p-4 sm:grid-cols-[1fr_10rem] sm:items-end">
+        <label className="flex items-start gap-3 text-sm">
           <input name="allowMakeup" type="checkbox" defaultChecked className="mt-0.5 size-4 accent-primary" />
           <span><span className="block font-medium">允许补打卡</span><span className="text-muted-foreground">超过正常截止时间后，在指定天数内仍可提交。</span></span>
         </label>

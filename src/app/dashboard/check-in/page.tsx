@@ -1,39 +1,104 @@
-import { CalendarCheck2, Camera, CheckCircle2 } from "lucide-react"
-
-import { CheckInTaskCard } from "@/components/check-in/check-in-task-card"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
+import { CheckInExperience } from "@/components/check-in/check-in-experience"
 import { requireRole } from "@/lib/auth"
 import { getAvailableCheckInTasks } from "@/lib/check-in"
-import { formatShanghaiDate } from "@/lib/dates"
+import { getCheckInAvailableAt } from "@/lib/check-in-window"
+import { dateKeyToDatabaseDate, getShanghaiDateKey } from "@/lib/dates"
 import { prisma } from "@/lib/prisma"
 
-export default async function CheckInPage() {
+type CalendarStatus = "submitted" | "makeup" | "expired" | "returned" | "pending" | "scheduled"
+
+const calendarStatusPriority: Record<CalendarStatus, number> = {
+  submitted: 1,
+  scheduled: 2,
+  pending: 3,
+  makeup: 4,
+  expired: 5,
+  returned: 6,
+}
+
+function getMonthBounds(dateKey: string) {
+  const [year, month] = dateKey.split("-").map(Number)
+  const firstDay = `${year}-${String(month).padStart(2, "0")}-01`
+  const nextMonth = month === 12
+    ? `${year + 1}-01-01`
+    : `${year}-${String(month + 1).padStart(2, "0")}-01`
+
+  return {
+    start: dateKeyToDatabaseDate(firstDay),
+    end: dateKeyToDatabaseDate(nextMonth),
+  }
+}
+
+function getCalendarMonth(value: string | undefined, fallbackDateKey: string) {
+  if (value && /^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return value
+  return fallbackDateKey.slice(0, 7)
+}
+
+export default async function CheckInPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ month?: string | string[] }>
+}) {
   const user = await requireRole(["ADMIN", "USER"])
-  const [tasks, membership] = await Promise.all([
+  const today = getShanghaiDateKey()
+  const params = await searchParams
+  const calendarMonth = getCalendarMonth(typeof params.month === "string" ? params.month : undefined, today)
+  const monthBounds = getMonthBounds(`${calendarMonth}-01`)
+
+  const [tasks, membership, calendarOccurrences] = await Promise.all([
     getAvailableCheckInTasks(user.id),
     prisma.groupMember.findUnique({ where: { userId: user.id }, include: { group: true } }),
+    prisma.checkInOccurrence.findMany({
+      where: {
+        checkInDate: { gte: monthBounds.start, lt: monthBounds.end },
+        OR: [
+          {
+            plan: {
+              status: "ACTIVE",
+              group: { members: { some: { userId: user.id, participatesInCheckIn: true } } },
+            },
+          },
+          { submissions: { some: { userId: user.id, status: { in: ["SUBMITTED", "MAKEUP"] } } } },
+        ],
+      },
+      include: {
+        plan: { select: { allowEarlyCheckIn: true, earlyCheckInDays: true } },
+        submissions: {
+          where: { userId: user.id },
+          select: { status: true, returnedAt: true },
+        },
+      },
+    }),
   ])
 
-  return (
-    <div className="mx-auto w-full max-w-2xl space-y-6 pb-20 sm:pb-6">
-      <div>
-        <Badge variant="secondary" className="mb-3"><CalendarCheck2 />{formatShanghaiDate(new Date(), { month: "long", day: "numeric", weekday: "long" })}</Badge>
-        <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">你好，{user.displayName}</h1>
-        <p className="mt-1 text-muted-foreground">{membership ? `${membership.group.name} · 今天也要记得完成作业` : "你还没有加入打卡小组"}</p>
-      </div>
+  const now = new Date()
+  const calendarEntries = new Map<string, CalendarStatus>()
+  for (const occurrence of calendarOccurrences) {
+    const submission = occurrence.submissions[0]
+    const dateKey = occurrence.checkInDate.toISOString().slice(0, 10)
+    let status: CalendarStatus
 
-      {tasks.length ? tasks.map((task) => <CheckInTaskCard key={task.id} task={task} />) : (
-        <Card className="border-dashed">
-          <CardContent className="flex min-h-72 items-center justify-center text-center">
-            <div className="max-w-sm space-y-3 px-6">
-              {membership ? <CheckCircle2 className="mx-auto size-11 text-primary" /> : <Camera className="mx-auto size-11 text-muted-foreground" />}
-              <p className="text-lg font-medium">{membership ? "当前没有待打卡任务" : "尚未加入小组"}</p>
-              <p className="text-sm leading-6 text-muted-foreground">{membership ? "今天可能不在打卡日内，或管理员尚未创建打卡规则。" : "请联系 ROOT 或 ADMIN 将你加入小组。"}</p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+    if (submission?.status === "SUBMITTED") status = "submitted"
+    else if (submission?.status === "MAKEUP") status = "makeup"
+    else if (submission?.returnedAt) status = "returned"
+    else if (now > occurrence.dueAt) status = occurrence.makeupUntil && now <= occurrence.makeupUntil ? "makeup" : "expired"
+    else if (now >= getCheckInAvailableAt(occurrence.opensAt, occurrence.plan)) status = "pending"
+    else status = "scheduled"
+
+    const current = calendarEntries.get(dateKey)
+    if (!current || calendarStatusPriority[status] > calendarStatusPriority[current]) {
+      calendarEntries.set(dateKey, status)
+    }
+  }
+
+  return (
+    <CheckInExperience
+      calendarEntries={Array.from(calendarEntries, ([dateKey, status]) => ({ dateKey, status }))}
+      calendarMonth={calendarMonth}
+      groupName={membership?.group.name ?? null}
+      tasks={tasks}
+      today={today}
+      userName={user.displayName}
+    />
   )
 }

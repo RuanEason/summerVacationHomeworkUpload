@@ -5,6 +5,7 @@ import { redirect } from "next/navigation"
 import { z } from "zod"
 
 import { requireRole } from "@/lib/auth"
+import { MAX_EARLY_CHECK_IN_DAYS } from "@/lib/check-in-window"
 import {
   addDays,
   dateKeyAtMinutes,
@@ -35,6 +36,8 @@ const planSchema = z.object({
   dueTime: z.string().regex(timePattern, "请选择截止时间"),
   requiredImageCount: z.coerce.number().int().min(1, "至少需要 1 张图片").max(20),
   maxImageCount: z.coerce.number().int().min(1).max(30),
+  allowEarlyCheckIn: z.string().optional(),
+  earlyCheckInDays: z.coerce.number().int().min(0).max(MAX_EARLY_CHECK_IN_DAYS),
   allowMakeup: z.string().optional(),
   makeupDays: z.coerce.number().int().min(0).max(30),
 })
@@ -132,6 +135,12 @@ export async function createCheckInPlan(
     return { errors: { makeupDays: ["允许补卡时，补卡天数至少为 1 天"] } }
   }
 
+  const allowEarlyCheckIn = parsed.data.allowEarlyCheckIn === "on"
+  const earlyCheckInDays = allowEarlyCheckIn ? parsed.data.earlyCheckInDays : 0
+  if (allowEarlyCheckIn && earlyCheckInDays < 1) {
+    return { errors: { earlyCheckInDays: ["允许提前打卡时，提前天数至少为 1 天"] } }
+  }
+
   const matchingDates = enumerateDateKeys(parsed.data.startDate, parsed.data.endDate)
     .filter((dateKey) => weekdays.includes(getDateKeyWeekday(dateKey)))
 
@@ -153,6 +162,8 @@ export async function createCheckInPlan(
         dueTimeMinutes: dueMinutes,
         requiredImageCount: parsed.data.requiredImageCount,
         maxImageCount: parsed.data.maxImageCount,
+        allowEarlyCheckIn,
+        earlyCheckInDays,
         allowMakeup,
         makeupDays,
       },
@@ -188,6 +199,61 @@ export async function createCheckInPlan(
   revalidatePath("/dashboard/rules")
   revalidatePath("/dashboard/submissions")
   return { success: true, message: `规则已启用，共生成 ${matchingDates.length} 个每日打卡任务。` }
+}
+
+const earlyCheckInSettingsSchema = z.object({
+  allowEarlyCheckIn: z.string().optional(),
+  earlyCheckInDays: z.coerce.number().int().min(0).max(MAX_EARLY_CHECK_IN_DAYS),
+})
+
+export async function updateEarlyCheckInSettings(
+  planId: string,
+  _state: AdminActionState,
+  formData: FormData
+): Promise<AdminActionState> {
+  const parsedPlanId = z.string().uuid().safeParse(planId)
+  const parsed = earlyCheckInSettingsSchema.safeParse(Object.fromEntries(formData))
+  if (!parsedPlanId.success || !parsed.success) {
+    return { errors: parsed.success ? undefined : parsed.error.flatten().fieldErrors, message: parsedPlanId.success ? undefined : "规则参数无效。" }
+  }
+
+  const plan = await prisma.checkInPlan.findUnique({ where: { id: parsedPlanId.data } })
+  if (!plan || plan.status === "ARCHIVED") return { message: "该规则不存在或已归档。" }
+
+  const { user } = await requireOwnedGroup(plan.groupId)
+  const allowEarlyCheckIn = parsed.data.allowEarlyCheckIn === "on"
+  const earlyCheckInDays = allowEarlyCheckIn ? parsed.data.earlyCheckInDays : 0
+  if (allowEarlyCheckIn && earlyCheckInDays < 1) {
+    return { errors: { earlyCheckInDays: ["允许提前打卡时，提前天数至少为 1 天"] } }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.checkInPlan.update({
+      where: { id: plan.id },
+      data: { allowEarlyCheckIn, earlyCheckInDays },
+    })
+    await tx.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "CHECK_IN_PLAN_EARLY_CHECK_IN_UPDATED",
+        entityType: "CheckInPlan",
+        entityId: plan.id,
+        summary: `${allowEarlyCheckIn ? `允许提前 ${earlyCheckInDays} 天打卡` : "关闭提前打卡"}：${plan.title}`,
+        metadata: {
+          previousAllowEarlyCheckIn: plan.allowEarlyCheckIn,
+          previousEarlyCheckInDays: plan.earlyCheckInDays,
+          allowEarlyCheckIn,
+          earlyCheckInDays,
+        },
+      },
+    })
+  })
+
+  revalidatePath("/dashboard")
+  revalidatePath("/dashboard/rules")
+  revalidatePath("/dashboard/check-in")
+  revalidatePath("/dashboard/submissions")
+  return { success: true, message: allowEarlyCheckIn ? `已允许成员提前 ${earlyCheckInDays} 天打卡。` : "已关闭提前打卡。" }
 }
 
 export async function toggleCheckInPlan(planId: string) {

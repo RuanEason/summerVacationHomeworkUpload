@@ -1,7 +1,8 @@
-import { Archive, CalendarDays, ImageIcon, Pause, Play, RotateCcw } from "lucide-react"
+import { Archive, CalendarDays, Clock3, ImageIcon, Pause, Play, RotateCcw } from "lucide-react"
 
 import { archiveCheckInPlan, toggleCheckInPlan } from "@/app/actions/admin"
 import { CreatePlanForm } from "@/components/admin/create-plan-form"
+import { EarlyCheckInSettingsForm } from "@/components/admin/early-check-in-settings-form"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -46,7 +47,8 @@ export default async function RulesPage() {
                   <div className="rounded-lg bg-muted/50 p-3"><p className="text-muted-foreground">图片要求</p><p className="mt-1 inline-flex items-center gap-1 font-medium"><ImageIcon className="size-4" />{plan.requiredImageCount} 张</p></div>
                   <div className="rounded-lg bg-muted/50 p-3"><p className="text-muted-foreground">每日任务</p><p className="mt-1 font-medium">{plan._count.occurrences} 个</p></div>
                 </div>
-                <div className="flex flex-wrap gap-2">{weekdays.map((day) => <Badge key={day} variant="outline">{weekdayNames[day]}</Badge>)}{plan.allowMakeup ? <Badge variant="outline"><RotateCcw />可补 {plan.makeupDays} 天</Badge> : null}</div>
+                <div className="flex flex-wrap gap-2">{weekdays.map((day) => <Badge key={day} variant="outline">{weekdayNames[day]}</Badge>)}{plan.allowEarlyCheckIn ? <Badge variant="outline"><Clock3 />提前 {plan.earlyCheckInDays} 天</Badge> : null}{plan.allowMakeup ? <Badge variant="outline"><RotateCcw />可补 {plan.makeupDays} 天</Badge> : null}</div>
+                {plan.status !== "ARCHIVED" ? <EarlyCheckInSettingsForm planId={plan.id} allowEarlyCheckIn={plan.allowEarlyCheckIn} earlyCheckInDays={plan.earlyCheckInDays} /> : null}
                 {["ACTIVE", "PAUSED"].includes(plan.status) ? <div className="flex flex-wrap gap-2"><form action={toggleCheckInPlan.bind(null, plan.id)}><Button variant="outline" size="sm" type="submit">{plan.status === "ACTIVE" ? <Pause /> : <Play />}{plan.status === "ACTIVE" ? "暂停规则" : "重新启用"}</Button></form><form action={archiveCheckInPlan.bind(null, plan.id)}><Button variant="destructive" size="sm" type="submit"><Archive />归档规则</Button></form></div> : null}
               </CardContent>
             </Card>

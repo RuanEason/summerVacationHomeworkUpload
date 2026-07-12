@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 
 import { requireRole } from "@/lib/auth"
+import { getCheckInAvailableAt } from "@/lib/check-in-window"
 import { prisma } from "@/lib/prisma"
 
 export type CheckInActionState = {
@@ -53,10 +54,11 @@ export async function submitCheckIn(
 
   const now = new Date()
   let status: "SUBMITTED" | "MAKEUP"
+  const availableAt = getCheckInAvailableAt(occurrence.opensAt, occurrence.plan)
   const isReturned = Boolean(submission.returnedAt && submission.returnedFromStatus)
   if (isReturned) {
     status = submission.returnedFromStatus === "MAKEUP" ? "MAKEUP" : "SUBMITTED"
-  } else if (now < occurrence.opensAt) return { message: "打卡尚未开始。" }
+  } else if (now < availableAt) return { message: "打卡尚未开始。" }
   else if (now <= occurrence.dueAt) {
     status = "SUBMITTED"
   } else if (occurrence.makeupUntil && now <= occurrence.makeupUntil) {
@@ -64,6 +66,8 @@ export async function submitCheckIn(
   } else {
     return { message: "打卡和补卡时间均已结束。" }
   }
+
+  const isEarlySubmission = status === "SUBMITTED" && now < occurrence.opensAt
 
   const committed = await prisma.$transaction(async (tx) => {
     const updated = await tx.submission.updateMany({
@@ -82,10 +86,10 @@ export async function submitCheckIn(
     await tx.auditLog.create({
       data: {
         actorId: user.id,
-        action: status === "MAKEUP" ? "CHECK_IN_MAKEUP_SUBMITTED" : "CHECK_IN_SUBMITTED",
+        action: status === "MAKEUP" ? "CHECK_IN_MAKEUP_SUBMITTED" : isEarlySubmission ? "CHECK_IN_EARLY_SUBMITTED" : "CHECK_IN_SUBMITTED",
         entityType: "Submission",
         entityId: submission.id,
-        summary: `${user.username} 提交 ${occurrence.plan.title}${status === "MAKEUP" ? "（补卡）" : ""}`,
+        summary: `${user.username} 提交 ${occurrence.plan.title}${status === "MAKEUP" ? "（补卡）" : isEarlySubmission ? "（提前打卡）" : ""}`,
       },
     })
     return true
@@ -97,5 +101,5 @@ export async function submitCheckIn(
   revalidatePath("/dashboard/check-in")
   revalidatePath("/dashboard/history")
   revalidatePath("/dashboard/submissions")
-  return { success: true, message: status === "MAKEUP" ? "补卡提交成功。" : "今日打卡成功。" }
+  return { success: true, message: status === "MAKEUP" ? "补卡提交成功。" : isEarlySubmission ? "提前打卡提交成功。" : "今日打卡成功。" }
 }

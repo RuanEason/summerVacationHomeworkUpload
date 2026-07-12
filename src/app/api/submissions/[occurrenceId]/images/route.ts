@@ -1,6 +1,7 @@
 import { z } from "zod"
 
 import { issueCosUploadCredentials } from "@/lib/cos-sts"
+import { getCheckInAvailableAt } from "@/lib/check-in-window"
 import { prisma } from "@/lib/prisma"
 import { getCurrentUser } from "@/lib/session"
 import {
@@ -65,12 +66,13 @@ async function getUploadContext(occurrenceIdValue: string, requireUploadWindow =
   if (requireUploadWindow) {
     const now = new Date()
     const isReturned = Boolean(existing?.returnedAt)
-    const canUpload = isReturned || (now >= occurrence.opensAt &&
+    const availableAt = getCheckInAvailableAt(occurrence.opensAt, occurrence.plan)
+    const canUpload = isReturned || (now >= availableAt &&
       (now <= occurrence.dueAt || Boolean(occurrence.makeupUntil && now <= occurrence.makeupUntil)))
     if (!canUpload) {
       return {
         response: Response.json({
-          message: now < occurrence.opensAt ? "打卡尚未开始。" : "打卡和补卡时间均已结束。",
+          message: now < availableAt ? "打卡尚未开始。" : "打卡和补卡时间均已结束。",
         }, { status: 409 }),
       }
     }

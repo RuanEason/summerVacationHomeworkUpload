@@ -38,6 +38,7 @@ type CheckInTask = {
   description: string | null
   groupName: string
   checkInDate: string
+  availableAt: string
   opensAt: string
   dueAt: string
   makeupUntil: string | null
@@ -95,7 +96,9 @@ function formatDateTime(value: string) {
   }).format(new Date(value))
 }
 
-export function CheckInTaskCard({ task }: { task: CheckInTask }) {
+export function CheckInTaskCard({ task: rawTask }: { task: CheckInTask }) {
+  const normalOpensAt = rawTask.opensAt
+  const task = { ...rawTask, opensAt: rawTask.availableAt }
   const [images, setImages] = useState(task.submission?.images ?? [])
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -107,13 +110,17 @@ export function CheckInTaskCard({ task }: { task: CheckInTask }) {
   const finalSubmission = task.submission && ["SUBMITTED", "MAKEUP"].includes(task.submission.status)
 
   const timing = useMemo(() => {
+    const isEarlySubmission = task.submission?.status === "SUBMITTED" && task.submission.submittedAt && new Date(task.submission.submittedAt).getTime() < new Date(normalOpensAt).getTime()
+    if (finalSubmission && isEarlySubmission) return { label: "提前打卡", variant: "default" as const, canEdit: false }
+    const isInEarlyWindow = !finalSubmission && !task.submission?.returnedAt && now >= new Date(task.opensAt).getTime() && now < new Date(normalOpensAt).getTime()
+    if (isInEarlyWindow) return { label: "提前打卡中", variant: "secondary" as const, canEdit: true }
     if (finalSubmission) return { label: task.submission?.status === "MAKEUP" ? "已补卡" : "已提交", variant: "default" as const, canEdit: false }
     if (task.submission?.returnedAt) return { label: "待重交", variant: "destructive" as const, canEdit: true }
     if (now < new Date(task.opensAt).getTime()) return { label: "未开始", variant: "outline" as const, canEdit: false }
     if (now <= new Date(task.dueAt).getTime()) return { label: "进行中", variant: "default" as const, canEdit: true }
     if (task.makeupUntil && now <= new Date(task.makeupUntil).getTime()) return { label: "补卡中", variant: "secondary" as const, canEdit: true }
     return { label: "已过期", variant: "destructive" as const, canEdit: false }
-  }, [finalSubmission, now, task.dueAt, task.makeupUntil, task.opensAt, task.submission?.returnedAt, task.submission?.status])
+  }, [finalSubmission, normalOpensAt, now, task.dueAt, task.makeupUntil, task.opensAt, task.submission?.returnedAt, task.submission?.status, task.submission?.submittedAt])
 
   async function uploadFiles(fileList: FileList | null) {
     if (!fileList?.length) return
@@ -259,9 +266,11 @@ export function CheckInTaskCard({ task }: { task: CheckInTask }) {
       <CardContent className="space-y-5 pt-5">
         {task.description ? <p className="rounded-xl bg-muted/40 p-3 text-sm leading-6 text-muted-foreground">{task.description}</p> : null}
 
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div className="rounded-xl border p-3"><p className="flex items-center gap-1.5 text-muted-foreground"><Clock3 className="size-4" />正常截止</p><p className="mt-1 font-medium">{formatDateTime(task.dueAt)}</p></div>
-          <div className="rounded-xl border p-3"><p className="flex items-center gap-1.5 text-muted-foreground"><RotateCcw className="size-4" />补卡截止</p><p className="mt-1 font-medium">{task.makeupUntil ? formatDateTime(task.makeupUntil) : "不允许补卡"}</p></div>
+        {task.availableAt !== normalOpensAt && now < new Date(normalOpensAt).getTime() ? <p className="rounded-xl border border-secondary/40 bg-secondary/10 p-3 text-sm text-muted-foreground">提前打卡已开放，原定开放时间：<span className="font-medium text-foreground">{formatDateTime(normalOpensAt)}</span></p> : null}
+
+        <div className="grid grid-cols-2 rounded-xl  text-sm">
+          <div className="border p-3"><p className="flex items-center gap-1.5 text-muted-foreground"><Clock3 className="size-4" />正常截止</p><p className="mt-1 font-medium">{formatDateTime(task.dueAt)}</p></div>
+          <div className="border p-3"><p className="flex items-center gap-1.5 text-muted-foreground"><RotateCcw className="size-4" />补卡截止</p><p className="mt-1 font-medium">{task.makeupUntil ? formatDateTime(task.makeupUntil) : "不允许补卡"}</p></div>
         </div>
 
         <div className="space-y-3">
@@ -285,7 +294,7 @@ export function CheckInTaskCard({ task }: { task: CheckInTask }) {
             {!finalSubmission && timing.canEdit && images.length < task.maxImageCount ? (
               <label className="flex aspect-square cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border border-dashed bg-muted/20 text-center text-xs text-muted-foreground transition-colors hover:border-primary hover:bg-primary/5 hover:text-primary">
                 {uploading ? <LoaderCircle className="size-7 animate-spin" /> : <ImagePlus className="size-7" />}
-                {uploading ? `直传 COS ${Math.round(uploadProgress * 100)}%` : "添加图片"}
+                {uploading ? `上传中 ${Math.round(uploadProgress * 100)}%` : "添加图片"}
                 <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple className="sr-only" disabled={uploading} onChange={(event) => uploadFiles(event.target.files)} />
               </label>
             ) : null}

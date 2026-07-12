@@ -153,6 +153,8 @@ model CheckInPlan {
   dueTimeMinutes     Int                 @default(1439)
   requiredImageCount Int                 @default(1)
   maxImageCount      Int                 @default(9)
+  allowEarlyCheckIn  Boolean             @default(false)
+  earlyCheckInDays   Int                 @default(0)
   allowMakeup        Boolean             @default(false)
   makeupDays         Int                 @default(0)
   createdAt          DateTime            @default(now())

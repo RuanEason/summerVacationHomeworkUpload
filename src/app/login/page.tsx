@@ -46,12 +46,12 @@ export default async function LoginPage() {
               <ClipboardCheck className="size-7" />
             </div>
             <h1 className="text-3xl font-semibold tracking-tight">欢迎回来</h1>
-            <p className="text-muted-foreground">登录后进入你的打卡主页或管理看板</p>
+            <p className="text-muted-foreground">登录后即可打卡</p>
           </div>
           <Card>
             <CardHeader>
               <CardTitle>账号登录</CardTitle>
-              <CardDescription>请输入 ROOT 或管理员分配的账号信息</CardDescription>
+              <CardDescription>请输入管理员分配的账号信息</CardDescription>
             </CardHeader>
             <CardContent>
               <LoginForm />

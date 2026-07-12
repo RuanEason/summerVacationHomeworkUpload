@@ -1,6 +1,7 @@
 import { z } from "zod"
 
 import { addDaysToDateKey, dateKeyToDatabaseDate, formatShanghaiDate, getShanghaiDateKey } from "@/lib/dates"
+import { getCheckInAvailableAt, isEarlyCheckIn } from "@/lib/check-in-window"
 import { getCurrentUser } from "@/lib/session"
 import { prisma } from "@/lib/prisma"
 
@@ -18,6 +19,8 @@ function getStatus({
   dueAt,
   makeupUntil,
   submissionStatus,
+  submittedAt,
+  earlyCheckInSettings,
   now,
 }: {
   planStatus: string
@@ -25,12 +28,14 @@ function getStatus({
   dueAt: Date
   makeupUntil: Date | null
   submissionStatus?: string
+  submittedAt?: Date | null
+  earlyCheckInSettings: { allowEarlyCheckIn: boolean; earlyCheckInDays: number }
   now: Date
 }) {
-  if (submissionStatus === "SUBMITTED") return "已提交"
+  if (submissionStatus === "SUBMITTED") return isEarlyCheckIn(submittedAt, opensAt) ? "提前打卡" : "已提交"
   if (submissionStatus === "MAKEUP") return "已补卡"
   if (planStatus === "PAUSED") return "规则暂停"
-  if (now < opensAt) return "未开始"
+  if (now < getCheckInAvailableAt(opensAt, earlyCheckInSettings)) return "未开始"
   if (now <= dueAt) return "待提交"
   if (makeupUntil && now <= makeupUntil) return "可补卡"
   return "缺卡"
@@ -110,6 +115,8 @@ export async function GET(request: Request) {
           dueAt: occurrence.dueAt,
           makeupUntil: occurrence.makeupUntil,
           submissionStatus: submission?.status,
+          submittedAt: submission?.submittedAt,
+          earlyCheckInSettings: occurrence.plan,
           now,
         }),
         submission?.submittedAt ? formatShanghaiDate(submission.submittedAt, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "",
